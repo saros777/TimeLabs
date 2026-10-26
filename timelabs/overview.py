@@ -90,7 +90,7 @@ class WeekTable(QTableWidget):
 
 
 class SourceDialog(QDialog):
-    def __init__(self, source, parent=None, can_save=False):
+    def __init__(self, source, parent=None, can_save=False, save_label='Сохранить уточнения исходной книги'):
         super().__init__(parent)
         self.source = deepcopy(source)
         source = self.source
@@ -138,7 +138,7 @@ class SourceDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         if can_save:
-            save = buttons.addButton('Сохранить исходную книгу для сверки', QDialogButtonBox.ButtonRole.AcceptRole)
+            save = buttons.addButton(save_label, QDialogButtonBox.ButtonRole.AcceptRole)
             save.clicked.connect(self.accept)
         layout.addWidget(buttons)
 

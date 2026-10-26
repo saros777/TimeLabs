@@ -42,7 +42,7 @@ def day_lessons(project: dict, day: str) -> list[dict]:
     return deepcopy([x for x in project["lessons"] if x["weekday"] == weekday])
 
 
-def validate(project: dict, lessons: list[dict], day: str | None = None) -> list[str]:
+def validate(project: dict, lessons: list[dict], day: str | None = None, *, draft=False) -> list[str]:
     errors, busy, loads, seen = [], {}, {}, set()
     for lesson in lessons:
         name = lesson.get("id", "?")
@@ -52,9 +52,9 @@ def validate(project: dict, lessons: list[dict], day: str | None = None) -> list
         try:
             pupils = members(project, lesson["groups"])
             subject = project["subjects"][lesson["subject"]]
-            room = project["rooms"][lesson["room"]]
+            room = project["rooms"][lesson["room"]] if lesson["room"] is not None else None
             teachers = [project["teachers"][t] for t in lesson["teachers"]]
-            if not pupils or not teachers or len(set(lesson["teachers"])) != len(teachers):
+            if not pupils or len(set(lesson["teachers"])) != len(teachers):
                 raise RuleError("Пустой состав или повтор преподавателя")
             if lesson.get("status") == "cancelled":
                 continue
@@ -66,9 +66,18 @@ def validate(project: dict, lessons: list[dict], day: str | None = None) -> list
             weekday = date.fromisoformat(day).isoweekday() if day else lesson["weekday"]
             if weekday not in project["weekdays"]:
                 raise RuleError("Нерабочий учебный день")
-            if len(pupils) > room["capacity"]:
+            if not draft:
+                if not teachers:
+                    errors.append(f"Занятие {name}: преподаватель не назначен")
+                if room is None:
+                    errors.append(f"Занятие {name}: кабинет не назначен")
+                elif room['capacity'] is None:
+                    errors.append(f"Занятие {name}: вместимость кабинета не задана")
+                if any(project['groups'][g].get('composition_pending') for g in lesson['groups']):
+                    errors.append(f"Занятие {name}: состав группы требует подтверждения")
+            if room and room['capacity'] is not None and len(pupils) > room["capacity"]:
                 raise RuleError("Недостаточная вместимость кабинета")
-            if not set(subject.get("equipment", [])) <= set(room.get("equipment", [])):
+            if room and not set(subject.get("equipment", [])) <= set(room.get("equipment", [])):
                 raise RuleError("Нет обязательного оборудования кабинета")
             for t in teachers:
                 if lesson["subject"] not in t["subjects"]:
@@ -79,10 +88,12 @@ def validate(project: dict, lessons: list[dict], day: str | None = None) -> list
                         raise RuleError(f"Отсутствует преподаватель: {project['teachers'][tid]['name']}")
                 for kind, ids in (("teachers", lesson["teachers"]), ("rooms", [lesson["room"]])):
                     for rid in ids:
+                        if rid is None:
+                            continue
                         if [weekday, period] in project[kind][rid].get("unavailable", []):
                             raise RuleError(f"Ресурс недоступен: {project[kind][rid]['name']}")
                 resources = [("учитель", t) for t in lesson["teachers"]]
-                resources += [("кабинет", lesson["room"])] + [("ученик", s) for s in pupils]
+                resources += ([("кабинет", lesson["room"])] if room else []) + [("ученик", s) for s in pupils]
                 for kind, rid in resources:
                     key = (weekday, period, kind, rid)
                     if key in busy:
@@ -126,7 +137,7 @@ def validate_project(project: dict) -> None:
         if teacher.get('preferred_room') and teacher['preferred_room'] not in project['rooms']:
             raise RuleError('Неизвестный предпочтительный кабинет')
     for room in project['rooms'].values():
-        if not isinstance(room['capacity'], int) or room['capacity'] < 1:
+        if room['capacity'] is not None and (not isinstance(room['capacity'], int) or room['capacity'] < 1):
             raise RuleError('Вместимость кабинета должна быть положительным целым числом')
     for field in ('daily_limits', 'weekly_limits'):
         for gid, limit in project['rules'].get(field, {}).items():
@@ -148,7 +159,7 @@ def validate_project(project: dict) -> None:
         # Drafts may contain unresolved absence conflicts; they cannot be approved.
         structure = deepcopy(project)
         structure["absences"] = []
-        errors = validate(structure, lessons, day)
+        errors = validate(structure, lessons, day, draft=True)
         if errors:
             raise RuleError("\n".join(errors))
 

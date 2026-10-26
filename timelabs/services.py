@@ -9,7 +9,7 @@ class Service:
         self.store = store
 
     def edit_day(self, project, day, lessons):
-        errors = validate(project, lessons, day)
+        errors = validate(project, lessons, day, draft=True)
         if errors:
             raise RuleError("\n".join(errors))
         old = project["days"].get(day, {})
@@ -32,7 +32,7 @@ class Service:
         if day:
             self.edit_day(p, day, lessons)
         else:
-            errors = validate(p, lessons)
+            errors = validate(p, lessons, draft=True)
             if errors:
                 raise RuleError("\n".join(errors))
             p["lessons"] = lessons

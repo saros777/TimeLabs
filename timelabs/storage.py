@@ -177,6 +177,9 @@ class Store:
         history = json.loads(historical)
         if set(history) != {'audit', 'revisions'} or not all(isinstance(history[k], list) for k in history):
             raise RuleError('Некорректная история проекта')
+        if project.get('source_workbook') and not project['lessons'] and not project['teachers']:
+            from .school_transfer import transfer_school
+            project = transfer_school(project, project['source_workbook'])
         validate_project(project)
         # Reapproval is required in the receiving school. Never import deliveries.
         project["outbox"] = []

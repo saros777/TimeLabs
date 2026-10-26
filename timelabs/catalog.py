@@ -33,6 +33,8 @@ class CatalogDialog(QDialog):
             for row, (key, value) in enumerate(project[kind].items()):
                 for col, (field, _) in enumerate(fields):
                     text = key if field == 'id' else value.get(field, '')
+                    if text is None:
+                        text = ''
                     if isinstance(text, list):
                         text = ', '.join(text)
                     table.setItem(row, col, QTableWidgetItem(str(text)))
@@ -98,9 +100,11 @@ class CatalogDialog(QDialog):
                     for col, (field, _) in enumerate(fields[1:], 1):
                         text = self.cell(table, row, col)
                         record[field] = ([s.strip() for s in text.split(',') if s.strip()] if field in ARRAY_FIELDS
-                                         else int(text) if field == 'capacity' else text)
+                                         else (int(text) if text else None) if field == 'capacity' else text)
                     if not record['name']:
                         raise RuleError('Заполните название каждой записи')
+                    if kind == 'groups' and record['members'] != p[kind].get(key, {}).get('members'):
+                        record.pop('composition_pending', None)
                     records[key] = record
                 p[kind] = records
             p.update(school=self.school.text(), year=self.year.text(), periods=self.periods.value(),

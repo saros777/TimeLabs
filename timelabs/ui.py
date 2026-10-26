@@ -14,7 +14,7 @@ from PySide6.QtGui import QAction, QColor, QDrag, QFont, QKeySequence, QTextDocu
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog,
     QFormLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget,
-    QMainWindow, QMessageBox, QPushButton, QSpinBox, QSplitter, QTableWidget,
+    QMainWindow, QMessageBox, QPushButton, QSpinBox, QSplitter, QTableWidget, QListWidgetItem,
     QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget, QProgressDialog, QToolTip,
 )
 from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
@@ -27,8 +27,9 @@ from .storage import ROLES, Store
 from .weekly import generate_week
 from .catalog import CatalogDialog
 from .cards import CARDS_ROLE, PREVIEW_ROLE, LessonDelegate, layout_cards
-from .school_import import apply_clarification, read_school_workbook
+from .school_import import apply_clarification, read_school_workbook, class_sort
 from .overview import SourceDialog
+from .school_transfer import transfer_school
 
 DAYS = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
 STATUSES = {'draft': 'Черновик', 'checked': 'Проверено', 'approved': 'Утверждено', 'published': 'Опубликовано'}
@@ -121,6 +122,7 @@ class Grid(QTableWidget):
         self.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.horizontalHeader().setMinimumSectionSize(130)
         self.setWordWrap(True)
         self.setItemDelegate(LessonDelegate(self))
         self.hit_lesson = None
@@ -267,7 +269,8 @@ class Window(QMainWindow):
             'Проект': [('Демонстрационный пример', self.demo), ('Экспорт проекта…', self.export),
                         ('Импорт проекта…', self.import_archive), ('Резервная копия…', self.backup),
                         ('Импорт XLSX…', self.import_excel), ('Экспорт XLSX…', self.excel),
-                        ('Школьная книга и кабинеты…', self.import_school), ('Открыть сохранённую сверку…', self.open_school)],
+                        ('Загрузить школьную книгу и кабинеты…', self.import_school), ('Открыть сохранённую сверку…', self.open_school),
+                        ('Загрузить сохранённую книгу в расписание…', self.activate_school)],
             'Генерация': [('Разместить занятия базовой недели…', lambda: self.calculate(weekly=True))],
             'Печать': [('Предварительный просмотр…', self.print_preview), ('Сохранить PDF…', self.pdf)],
             'Доступ': [('Создать пользователя…', self.user_create), ('Сменить пользователя', self.logout)],
@@ -338,7 +341,7 @@ class Window(QMainWindow):
         self.info.setText(f"{status}\nРедакция проекта: {self.version}\n{self.store.user['login']} · {ROLE_NAMES[self.store.user['role']]}\n\n{len(self.lessons)} занятий · {len(self.p['teachers'])} учителей\nПравила: {'подтверждены' if self.p['rules']['approved'] else 'требуют согласования'}")
         view = self.view.currentText()
         kind = {'Учителя': 'teachers', 'Кабинеты': 'rooms', 'Группы': 'groups'}.get(view)
-        columns = [(k, v['name']) for k, v in self.p[kind].items()] if kind else [(c, c) for c in sorted({v['class'] for v in self.p['groups'].values()})]
+        columns = [(k, v['name']) for k, v in self.p[kind].items()] if kind else [(c, c) for c in sorted({v['class'] for v in self.p['groups'].values()}, key=class_sort)]
         self.grid.clear()
         self.grid.setRowCount(self.p['periods'])
         self.grid.setColumnCount(len(columns))
@@ -360,7 +363,7 @@ class Window(QMainWindow):
                 item.setToolTip(item.text() or 'Свободный слот')
                 item.setData(CARDS_ROLE, self.daily_cards(found, base, day))
                 if found:
-                    color = self.p['teachers'][found[0]['teachers'][0]].get('color', '#E2EDFA')
+                    color = found[0].get('color', '#E2EDFA') if not found[0]['teachers'] else self.p['teachers'][found[0]['teachers'][0]].get('color', '#E2EDFA')
                     item.setBackground(QColor(color))
                     item.setForeground(QColor('#142D4E'))
                     if day and any(x['id'] not in base or x != base[x['id']] for x in found) and base:
@@ -383,15 +386,15 @@ class Window(QMainWindow):
             status = 'ОТМЕНА · ' if lesson.get('status') == 'cancelled' else ''
             changed = day and base and (lesson['id'] not in base or lesson != base[lesson['id']])
             label = ('Δ ' if changed else '') + status + self.p['subjects'][lesson['subject']]['name']
-            label += '\n' + ', '.join(self.p['teachers'][t]['name'] for t in lesson['teachers'])
-            label += ' · ' + self.p['rooms'][lesson['room']]['name']
-            color = '#FDE1E1' if status else self.p['teachers'][lesson['teachers'][0]].get('color', '#E2EDFA')
+            label += '\n' + (', '.join(self.p['teachers'][t]['name'] for t in lesson['teachers']) or 'Преподаватель не назначен')
+            label += ' · ' + self.p['rooms'].get(lesson['room'], {}).get('name', 'Кабинет не назначен')
+            color = '#FDE1E1' if status else (self.p['teachers'][lesson['teachers'][0]].get('color', '#E2EDFA') if lesson['teachers'] else lesson.get('color', '#FFF3D8'))
             cards.append(dict(id=lesson['id'], label=label, color=color, tooltip=self.lesson_text(lesson)))
         return cards
 
     def lesson_text(self, l):
         marker = 'ОТМЕНА · ' if l.get('status') == 'cancelled' else 'ВОСПОЛНЕНИЕ · ' if l.get('status') == 'makeup' else ''
-        return marker + self.p['subjects'][l['subject']]['name'] + (' 🔒' if l.get('locked') else '') + '\n' + ', '.join(self.p['groups'][g]['name'] for g in l['groups']) + '\n' + ', '.join(self.p['teachers'][t]['name'] for t in l['teachers']) + ' · каб. ' + self.p['rooms'][l['room']]['name']
+        return marker + self.p['subjects'][l['subject']]['name'] + (' 🔒' if l.get('locked') else '') + '\n' + ', '.join(self.p['groups'][g]['name'] for g in l['groups']) + '\n' + (', '.join(self.p['teachers'][t]['name'] for t in l['teachers']) or 'Преподаватель не назначен') + ' · каб. ' + self.p['rooms'].get(l['room'], {}).get('name', 'не назначен')
 
     def checkpoint(self):
         self.undo_stack.append((self.version, deepcopy(self.p)))
@@ -413,7 +416,7 @@ class Window(QMainWindow):
             lessons = deepcopy(original)
             lesson = next(x for x in lessons if x['id'] == lesson_id)
             lesson['slot'] = row + 1
-            errors = ['Урок закреплён'] if lesson.get('locked') else validate(self.p, lessons, day)
+            errors = ['Урок закреплён'] if lesson.get('locked') else validate(self.p, lessons, day, draft=True)
             for col in range(self.grid.columnCount()):
                 item = self.grid.item(row, col)
                 item.setData(PREVIEW_ROLE, not bool(errors))
@@ -469,13 +472,24 @@ class Window(QMainWindow):
     def lesson_form(self, existing=None):
         def work():
             self.store.require('edit')
-            if not all(self.p[k] for k in ('subjects', 'groups', 'teachers', 'rooms')):
+            if not all(self.p[k] for k in ('subjects', 'groups')):
                 raise RuleError('Сначала заполните справочники или загрузите демонстрационный пример')
             d = Form(self, 'Занятие' if existing else 'Новое занятие')
             subject = d.combo('Предмет', [(k, v['name']) for k, v in self.p['subjects'].items()])
             groups = d.text('Группы: ID через запятую', ','.join(existing['groups']) if existing else next(iter(self.p['groups'])))
-            teachers = d.text('Учителя: ID через запятую', ','.join(existing['teachers']) if existing else next(iter(self.p['teachers'])))
-            room = d.combo('Кабинет', [(k, v['name']) for k, v in self.p['rooms'].items()])
+            teachers = QListWidget()
+            teachers.setMaximumHeight(160)
+            for tid, record in self.p['teachers'].items():
+                item = QListWidgetItem(record['name'])
+                item.setData(Qt.ItemDataRole.UserRole, tid)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked if existing and tid in existing['teachers'] else Qt.CheckState.Unchecked)
+                teachers.addItem(item)
+            d.form.addRow('Преподаватели', teachers)
+            qualification = d.check('Подтверждаю допуск выбранных преподавателей к этому предмету')
+            if existing and existing.get('teacher_candidates'):
+                d.form.addRow(QLabel('Варианты из исходного снимка: ' + ', '.join(existing['teacher_candidates'])))
+            room = d.combo('Кабинет', [(None, 'Не назначен')] + [(k, v['name']) for k, v in self.p['rooms'].items()])
             slot = d.number('Номер урока', existing['slot'] if existing else 1, self.p['periods'])
             duration = d.number('Длительность в слотах', existing.get('duration', 1) if existing else 1, self.p['periods'])
             locked = d.check('Закрепить от перемещения', existing.get('locked', False) if existing else False)
@@ -492,8 +506,14 @@ class Window(QMainWindow):
                 raise RuleError('Данные изменились. Обновите экран')
             lesson = dict(id=existing['id'] if existing else uid(), weekday=self.date_edit.date().dayOfWeek() if self.current_day() else self.weekday.currentIndex() + 1,
                           slot=slot.value(), duration=duration.value(), subject=subject.currentData(),
-                          groups=[s.strip() for s in groups.text().split(',')], teachers=[s.strip() for s in teachers.text().split(',')],
+                          groups=[s.strip() for s in groups.text().split(',')], teachers=[teachers.item(i).data(Qt.ItemDataRole.UserRole) for i in range(teachers.count()) if teachers.item(i).checkState() == Qt.CheckState.Checked],
                           room=room.currentData(), locked=locked.isChecked(), status='cancelled' if cancelled.isChecked() else 'planned', comment=comment.text())
+            if qualification.isChecked():
+                for tid in lesson['teachers']:
+                    if lesson['subject'] not in p['teachers'][tid]['subjects']:
+                        p['teachers'][tid]['subjects'].append(lesson['subject'])
+            if existing:
+                lesson = {**existing, **lesson}
             if cancelled.isChecked() and not comment.text().strip():
                 raise RuleError('Укажите основание отмены')
             day = self.current_day()
@@ -563,6 +583,9 @@ class Window(QMainWindow):
                 raise RuleError('Расчёт уже выполняется')
             self.solve_version, project = self.store.load()
             self.solving_week = weekly
+            pending = validate(project, project['lessons'])
+            if any('не назначен' in e or 'не задана' in e or 'требует подтверждения' in e for e in pending):
+                raise RuleError('Перед расчётом заполните назначения, вместимость кабинетов и составы групп. Список — в контроле расписания.')
             if weekly and not project['lessons']:
                 raise RuleError('Введите занятия базовой недели: одна запись на каждое недельное занятие. Генератор разместит их по доступным дням и слотам.')
             self.solve_day = self.current_day()
@@ -682,7 +705,7 @@ class Window(QMainWindow):
                 d.form.addRow('Дата', target)
                 slot = d.number('Урок', 1, self.p['periods'])
                 teacher = d.combo('Учитель', [(k, v['name']) for k, v in self.p['teachers'].items()])
-                room = d.combo('Кабинет', [(k, v['name']) for k, v in self.p['rooms'].items()])
+                room = d.combo('Кабинет', [(None, 'Не назначен')] + [(k, v['name']) for k, v in self.p['rooms'].items()])
                 if d.finish():
                     self.service.assign_makeup(obligation['id'], target.date().toString('yyyy-MM-dd'), slot.value(), teacher.currentData(), room.currentData())
             self.refresh()
@@ -729,10 +752,12 @@ class Window(QMainWindow):
         if path:
             self.run(lambda: export_xlsx(self.p, self.p['lessons'], path))
 
-    def import_school(self):
+    def import_school(self, _checked=False, workbook_path=None):
         def work():
             self.store.require('catalog')
-            path, _ = QFileDialog.getOpenFileName(self, 'Уточнённая школьная книга', '', 'Excel (*.xlsx)')
+            path = workbook_path
+            if not path:
+                path, _ = QFileDialog.getOpenFileName(self, 'Уточнённая школьная книга', '', 'Excel (*.xlsx)')
             if not path:
                 return
             room_path, _ = QFileDialog.getOpenFileName(self, 'Список кабинетов (можно пропустить)', '', 'Word (*.docx)')
@@ -742,11 +767,33 @@ class Window(QMainWindow):
             if previous.get('sha256') == source['sha256']:
                 for clarification in previous.get('clarifications', []):
                     source = apply_clarification(source, clarification)
-            dialog = SourceDialog(source, self, can_save=True)
+            dialog = SourceDialog(source, self, can_save=True, save_label='Загрузить в рабочее расписание')
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 version, project = self.store.load()
-                project['source_workbook'] = dialog.source
-                self.store.save(project, version, 'school.import_review', 'catalog')
+                project = self.prepare_school_transfer(project, dialog.source)
+                if project is None:
+                    return
+                self.store.save(project, version, 'school.import', 'catalog')
+                self.refresh()
+        self.run(work)
+
+    def prepare_school_transfer(self, project, source):
+        if not confirm(self, f"Загрузить {len(source['events'])} занятий в рабочее расписание? Текущее расписание и справочники будут заменены. Будет создана резервная копия. Незаданные назначения останутся доступными для редактирования."):
+            return None
+        result = transfer_school(project, source)
+        self.automatic_backup()
+        return result
+
+    def activate_school(self):
+        def work():
+            self.store.require('catalog')
+            version, project = self.store.load()
+            if not project.get('source_workbook'):
+                raise RuleError('Сначала загрузите школьную книгу')
+            result = self.prepare_school_transfer(project, project['source_workbook'])
+            if result is not None:
+                self.store.save(result, version, 'school.activate', 'catalog')
+                self.scope.setCurrentIndex(1)
                 self.refresh()
         self.run(work)
 
@@ -772,6 +819,15 @@ class Window(QMainWindow):
             self.store.require('catalog')
             path, _ = QFileDialog.getOpenFileName(self, 'Импорт базовой недели', '', 'Excel (*.xlsx)')
             if not path:
+                return
+            from openpyxl import load_workbook
+            book = load_workbook(path, read_only=True)
+            try:
+                is_school = 'Группы — записи' in book.sheetnames
+            finally:
+                book.close()
+            if is_school:
+                self.import_school(workbook_path=path)
                 return
             lessons, issues = preview_xlsx(self.p, path)
             self.show_text('Предварительная проверка импорта', f'Прочитано занятий: {len(lessons)}\n' + '\n'.join(issues or ['Ошибок не обнаружено. Изменения ещё не сохранены.']))

@@ -16,7 +16,9 @@ def test_transfer_edit_roundtrip_and_no_invented_assignments(school_files, tmp_p
     assert len(p['lessons']) == len(source['events'])
     assert {e['id'] for e in source['events']} == {e['id'] for e in p['lessons']}
     assert sorted(r for e in p['lessons'] for r in e['source_rows']) == sorted(r['row'] for r in source['records'])
-    assert all(e['room'] is None and e['teachers'] == [] for e in p['lessons'])
+    assert all(e['room'] is None for e in p['lessons'])
+    assert any(e['teachers'] for e in p['lessons'])
+    assert all(not e['teachers'] or e['teacher_source'] for e in p['lessons'])
     assert all(r['capacity'] is None for r in p['rooms'].values())
     assert not validate(p, p['lessons'], draft=True)
     assert validate(p, p['lessons'])  # incomplete school data cannot be approved
@@ -77,7 +79,7 @@ def test_imported_draft_in_editor(school_files, tmp_path):
     window.lesson_form(lesson)
     saved = next(e for e in store.load()[1]['lessons'] if e['id'] == lesson['id'])
     assert saved['source_rows'] == lesson['source_rows']
-    assert saved['teachers'] == [] and saved['room'] is None
+    assert saved['teachers'] == lesson['teachers'] and saved['room'] is None
     assert store.load()[0] == 2
     window.close()
     store.db.close()

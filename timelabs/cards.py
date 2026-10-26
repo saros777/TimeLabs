@@ -58,6 +58,19 @@ class LessonDelegate(QStyledItemDelegate):
             font = QFont(option.font)
             font.setPointSizeF(9 if card.get('compact') else 10)
             painter.setFont(font)
+            if card.get('compact') and 'right' in card:
+                font.setPointSizeF(7.5)
+                painter.setFont(font)
+                metrics=painter.fontMetrics()
+                right=str(card['right'])
+                right_width=min(metrics.horizontalAdvance(right)+4,rect.width()*0.4)
+                label=metrics.elidedText(card.get('label',''),Qt.TextElideMode.ElideRight,max(1,int(rect.width()-right_width-5)))
+                painter.drawText(rect.adjusted(3,0,-right_width,0),Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft,label)
+                painter.drawText(rect.adjusted(0,0,-3,0),Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignRight,right)
+                if card.get('cancelled'):
+                    painter.setPen(QPen(QColor('#9F3643'),1))
+                    painter.drawLine(rect.left()+2,rect.center().y(),rect.right()-2,rect.center().y())
+                continue
             lines = card.get('label', '').split('\n')
             metrics = painter.fontMetrics()
             line_height = metrics.height()

@@ -23,6 +23,7 @@ def test_window_render_and_pdf(tmp_path):
     service.transition('2026-10-26', 'checked')
     service.transition('2026-10-26', 'approved')
     window = Window(store)
+    window.scope.setCurrentIndex(0)
     window.date_edit.setDate(QDate(2026, 10, 26))
     window.show()
     app.processEvents()
